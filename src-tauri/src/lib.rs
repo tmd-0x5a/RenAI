@@ -2,6 +2,9 @@ use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::Mutex;
 use tauri::Manager;
+use reqwest::blocking::Client;
+use std::fs::File;
+use zip::ZipArchive;
 
 struct AppPaths {
     resource_dir: PathBuf,
@@ -14,7 +17,7 @@ struct SidecarState {
     paths: Mutex<Option<AppPaths>>,
 }
 
-fn spawn_llama_server(paths: &AppPaths, model_name: &str) -> Result<Child, String> {
+fn spawn_llama_server(paths: &AppPaths, model_name: &str, use_gpu: bool) -> Result<Child, String> {
     // Prevent path traversal
     if model_name.contains('/') || model_name.contains('\\') || model_name.contains("..") {
         return Err("Invalid model name".to_string());
@@ -27,10 +30,21 @@ fn spawn_llama_server(paths: &AppPaths, model_name: &str) -> Result<Child, Strin
     }
 
     let model_path_str = model_path.to_string_lossy().to_string();
-    println!("Starting llama-server with model: {}", model_path_str);
+    println!("Starting llama-server with model: {} (GPU: {})", model_path_str, use_gpu);
 
-    Command::new(&paths.exe_path)
-        .current_dir(&paths.bin_dir)
+    let (exe_path, work_dir, gpu_layers) = if use_gpu {
+        let cuda_dir = paths.bin_dir.join("cuda");
+        let exe = cuda_dir.join("llama-server.exe");
+        if !exe.exists() {
+            return Err("GPU engine not installed".into());
+        }
+        (exe, cuda_dir, "99")
+    } else {
+        (paths.exe_path.clone(), paths.bin_dir.clone(), "0")
+    };
+
+    Command::new(&exe_path)
+        .current_dir(&work_dir)
         .args([
             "-m",
             &model_path_str,
@@ -41,7 +55,7 @@ fn spawn_llama_server(paths: &AppPaths, model_name: &str) -> Result<Child, Strin
             "--ctx-size",
             "2048",
             "--n-gpu-layers",
-            "0",
+            gpu_layers,
         ])
         .spawn()
         .map_err(|e| format!("Failed to spawn llama-server: {}", e))
@@ -73,7 +87,7 @@ fn list_models(state: tauri::State<SidecarState>) -> Vec<String> {
 }
 
 #[tauri::command]
-fn switch_model(model_name: String, state: tauri::State<SidecarState>) -> Result<String, String> {
+fn switch_model(model_name: String, use_gpu: bool, state: tauri::State<SidecarState>) -> Result<String, String> {
     // Kill existing llama-server
     {
         let mut child_guard = state.child.lock().unwrap();
@@ -91,7 +105,7 @@ fn switch_model(model_name: String, state: tauri::State<SidecarState>) -> Result
     let paths_guard = state.paths.lock().unwrap();
     let paths = paths_guard.as_ref().ok_or("Paths not initialized")?;
 
-    let child = spawn_llama_server(paths, &model_name)?;
+    let child = spawn_llama_server(paths, &model_name, use_gpu)?;
     let pid = child.id();
     drop(paths_guard);
 
@@ -102,6 +116,71 @@ fn switch_model(model_name: String, state: tauri::State<SidecarState>) -> Result
         model_name, pid
     );
     Ok(format!("Model switched to {}", model_name))
+}
+
+#[tauri::command]
+async fn download_gpu_engine(state: tauri::State<'_, SidecarState>) -> Result<String, String> {
+    let bin_dir = {
+        let paths_guard = state.paths.lock().unwrap();
+        let paths = paths_guard.as_ref().ok_or("Paths not initialized")?;
+        paths.bin_dir.clone()
+    };
+
+    let cuda_dir = bin_dir.join("cuda");
+    if cuda_dir.join("llama-server.exe").exists() {
+        return Ok("Already installed".into());
+    }
+
+    std::fs::create_dir_all(&cuda_dir).map_err(|e| e.to_string())?;
+
+    let url = "https://github.com/ggerganov/llama.cpp/releases/download/b4921/llama-b4921-bin-win-cuda-cu12.2.0-x64.zip";
+
+    tokio::task::spawn_blocking(move || {
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(300))
+            .build()
+            .map_err(|e| e.to_string())?;
+
+        let mut response = client.get(url).send().map_err(|e| e.to_string())?;
+        if !response.status().is_success() {
+            return Err(format!("Download failed with status: {}", response.status()));
+        }
+
+        let zip_path = cuda_dir.join("engine.zip");
+        let mut file = File::create(&zip_path).map_err(|e| e.to_string())?;
+        response.copy_to(&mut file).map_err(|e| e.to_string())?;
+
+        let file = File::open(&zip_path).map_err(|e| e.to_string())?;
+        let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
+
+        for i in 0..archive.len() {
+            let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
+            let outpath = match file.enclosed_name() {
+                Some(path) => cuda_dir.join(path),
+                None => continue,
+            };
+
+            if (*file.name()).ends_with('/') {
+                std::fs::create_dir_all(&outpath).map_err(|e| e.to_string())?;
+            } else {
+                if let Some(p) = outpath.parent() {
+                    if !p.exists() {
+                        std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
+                    }
+                }
+                let mut outfile = File::create(&outpath).map_err(|e| e.to_string())?;
+                std::io::copy(&mut file, &mut outfile).map_err(|e| e.to_string())?;
+            }
+        }
+
+        std::fs::remove_file(zip_path).ok();
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Task joined failed: {}", e))?
+    .map_err(|e| e)?;
+
+    Ok("GPU Engine installed successfully".into())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -115,7 +194,7 @@ pub fn run() {
             child: Mutex::new(None),
             paths: Mutex::new(None),
         })
-        .invoke_handler(tauri::generate_handler![list_models, switch_model])
+        .invoke_handler(tauri::generate_handler![list_models, switch_model, download_gpu_engine])
         .setup(|app| {
             let resource_dir = app
                 .path()
@@ -145,9 +224,9 @@ pub fn run() {
                 bin_dir,
             };
 
-            // Spawn default model
+            // Spawn default model (CPU by default initially, frontend handles switch on load)
             let child =
-                spawn_llama_server(&paths, default_model).expect("Failed to start llama-server");
+                spawn_llama_server(&paths, default_model, false).expect("Failed to start llama-server");
             println!("llama-server spawned with PID: {}", child.id());
 
             let state = app.state::<SidecarState>();
