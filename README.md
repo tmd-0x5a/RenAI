@@ -27,7 +27,7 @@
 ## プロジェクト構成
 
 ```
-D:\AI_renai\
+RenAI/
 ├── src/                          # フロントエンド (Next.js)
 │   ├── app/
 │   │   ├── globals.css           # グローバルCSS・テーマ変数
