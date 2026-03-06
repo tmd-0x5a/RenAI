@@ -1,0 +1,47 @@
+{
+  "identifier": "default",
+  "description": "Capability for the main window",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "http:default",
+    {
+      "identifier": "http:allow-fetch",
+      "allow": [
+        {
+          "url": "http://localhost:8080/*"
+        }
+      ]
+    },
+    {
+      "identifier": "http:allow-fetch-send",
+      "allow": [
+        {
+          "url": "http://localhost:8080/*"
+        }
+      ]
+    },
+    {
+      "identifier": "http:allow-fetch-read-body",
+      "allow": [
+        {
+          "url": "http://localhost:8080/*"
+        }
+      ]
+    },
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "llama-server",
+          "sidecar": true,
+          "args": true
+        }
+      ]
+    },
+    "dialog:default",
+    "fs:default"
+  ]
+}
