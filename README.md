@@ -1,4 +1,11 @@
-# 恋AI（Koi AI）
+# 恋AI（Ren AI）
+
+![Next.js](https://img.shields.io/badge/Next.js-black?style=flat-square&logo=next.js&logoColor=white)
+![React](https://img.shields.io/badge/React-20232A?style=flat-square&logo=react&logoColor=61DAFB)
+![Tailwind_CSS](https://img.shields.io/badge/Tailwind_CSS-38B2AC?style=flat-square&logo=tailwind-css&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?style=flat-square&logo=typescript&logoColor=white)
+![Rust](https://img.shields.io/badge/Rust-000000?style=flat-square&logo=rust&logoColor=white)
+![Tauri](https://img.shields.io/badge/Tauri-FFC131?style=flat-square&logo=tauri&logoColor=white)
 
 ローカルLLMを搭載した恋愛シミュレーションチャットアプリ。完全オフラインで動作し、自分だけのキャラクターを作成して会話を楽しめます。
 
@@ -143,14 +150,13 @@ npm run tauri dev
 
 **推奨モデル例：**
 
-| モデル | サイズ | メモリ目安 | 特徴 |
-|--------|--------|-----------|------|
-| Qwen3.5-0.8B-JP-Q8_0 | ~764 MB | 2 GB | 軽量・高速・CPU向け |
-| Qwen3.5-0.8B-JP-Q4_K_M | ~500 MB | 1.5 GB | さらに軽量 |
-| Qwen3.5-9B-Q4_K_M | ~5 GB | 8 GB | 高品質・要大容量RAM |
-| Qwen3.5-9B-Q8_0 | ~9 GB | 12 GB | 最高品質・かなり遅い |
+| モデル名 | 位置づけ | メモリ/VRAM目安 | 特徴 | 推奨GPU |
+|--------|--------|-----------|------|---------|
+| `Qwen3-VL-4B-Instruct-Q4_K_M.gguf` | **標準** | 4GB ~ | 品質と速度の優れたバランス | RTX 3060 等 (VRAM 6GB以上) |
+| `Qwen3.5-0.8B-JP-Q4_K_M.gguf` | **超軽量** | 1.5GB ~ | 日本語特化・最速 | なし (CPUでもサクサク動作) |
+| `Qwen3.5-9B-Q8_0.gguf` | **最高品質** | 10GB ~ | 最高品質・かなり遅い | RTX 4070 等 (VRAM 12GB以上) |
 
-> ファイル名の末尾がモデルの量子化レベルです。Q8_0が最高品質、Q4_K_Mが品質と速度のバランス型です。
+> ファイル名の末尾がモデルの量子化レベルです。Q8_0が高品質、Q4_K_Mが品質と速度のバランス型です。
 
 #### 2. ファイルの配置
 
