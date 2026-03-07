@@ -94,7 +94,8 @@ export default function Home() {
     const savedModel = localStorage.getItem("ai-renai-model");
     if (savedModel) {
       import("@tauri-apps/api/core").then(({ invoke }) => {
-        invoke<string>("switch_model", { modelName: savedModel }).catch((err) => {
+        const useGpu = localStorage.getItem("ai-renai-engine-mode") === "gpu";
+        invoke<string>("switch_model", { modelName: savedModel, useGpu }).catch((err) => {
           console.warn("[恋AI] Failed to auto-switch model:", err);
         });
       });

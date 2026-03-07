@@ -25,3 +25,5 @@ tempfile = "3.26.0"
 futures-util = "0.3.32"
 reqwest = { version = "0.13.2", default-features = false, features = ["native-tls", "blocking", "json", "stream"] }
 tokio = { version = "1.50.0", features = ["rt-multi-thread"] }
+tar = "0.4.44"
+flate2 = "1.1.9"

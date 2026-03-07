@@ -41,6 +41,13 @@
         }
       ]
     },
+    {
+      "identifier": "shell:allow-open",
+      "allow": [
+        { "url": "http://**" },
+        { "url": "https://**" }
+      ]
+    },
     "dialog:default",
     "fs:default"
   ]

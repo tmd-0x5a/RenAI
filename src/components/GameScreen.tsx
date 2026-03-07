@@ -2,10 +2,11 @@
 
 import { useState, useRef, useEffect, useCallback, type FormEvent } from "react";
 import type { HeroineConfig, ChatMessage } from "@/app/page";
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getImageSrc } from "@/lib/utils";
 
-const LLAMA_API = "http://localhost:8080/v1/chat/completions";
+const LLAMA_API = "http://127.0.0.1:8080/v1/chat/completions";
 const MAX_HISTORY = 10;
 
 
@@ -18,7 +19,7 @@ function buildSystemPrompt(config: HeroineConfig): string {
 特に感情がないときは必ず[通常]を使うこと。
 使えるタグ: ${labels.map(l => `[${l}]`).join(', ')}, [通常]
 
-例:
+例:（参考程度・似せないこと・影響を与えない）
 [照れ]えへへ…ありがと
 [通常]おはよ 今日も早いね
 [笑顔]うん！楽しみだね`
@@ -46,8 +47,9 @@ ${expressionInstruction}
 11. 漢字を使いすぎない
 12. 質問を1つ混ぜる（性格に合った自然な質問に）
 13. 1メッセージは30文字以内 これを絶対厳守
-14. 返答はいつも${config.persona}と${config.tone}に忠実な自然な一言だけにする
-15. 言いたいことが多いときは改行で区切って複数メッセージに分けてOK（各メッセージは30文字以内）
+14. 【超重要】英語での出力は一切禁止。「Thinking Process:」「Analyze:」「Draft:」などの思考の途中過程や理由付け、草案は【絶対に出力してはいけない】。
+15. 前置きは一切せず、いきなり最終的な【1つのセリフだけ】を出力しなさい。
+16. 言いたいことが多いときは改行で区切って複数メッセージに分けてOK（各メッセージは30文字以内）
 
 ## 返答の例（参考程度・似せないこと・影響を与えない）
 ユーザー: 今日どうだった？
@@ -60,7 +62,7 @@ ${labels.length > 0 ? '[通常]' : ''}でも君と話せて元気出た♪
 /** Strip <think> tags and extract [expression] tag + split multiple messages */
 function processResponse(text: string, labels: string[]): { expression: string; messages: string[] } {
   // Strip think tags
-  let cleaned = text
+  const cleaned = text
     .replace(/<think[\s\S]*?<\/think>/g, '')
     .replace(/<think[\s\S]*/g, '')
     .trim();
@@ -84,7 +86,22 @@ function processResponse(text: string, labels: string[]): { expression: string; 
     }
     // Remove any remaining stray tags
     content = content.replace(/\[[^\]]*\]/g, '').trim();
+    
+    // Ignore meta/reasoning texts that leaked out (e.g. "Draft 1:", "Note:")
+    if (content.match(/^(Draft|Note|思考|考え|ユーザー|User|bot)[\s\d]*:/i)) {
+      break; // これ以降はすべて不要なメタ情報とみなして打ち切る
+    }
+    // Also ignore lines that consist only of asterisks or brackets
+    if (content.match(/^[\*\-~=]+$/)) {
+      continue;
+    }
+
     if (content) {
+      // Draft 1: などのメタテキストが来た場合は、それ以降の行もすべてドラフトや不要なログである可能性が
+      // 高いため、ここで解析自体を完全に打ち切る（正常な複数行メッセージはそのまま通す）
+      if (content.match(/^(Draft|Note|思考|考え|ユーザー|User|bot)[\s\d]*:/i)) {
+        break;
+      }
       messages.push(content);
     }
   }
@@ -94,9 +111,12 @@ function processResponse(text: string, labels: string[]): { expression: string; 
 
 /** For streaming display: just strip tags */
 function stripForDisplay(text: string): string {
-  return text
+  const cleaned = text
     .replace(/<think[\s\S]*?<\/think>/g, '')
     .replace(/<think[\s\S]*/g, '')
+    .trim();
+
+  return cleaned
     .replace(/\[[^\]]*\]/g, '')
     .trim();
 }
@@ -162,99 +182,94 @@ export default function GameScreen({ config, onBack, initialMessages = [], onMes
     ];
 
     console.log("[AI Renai] System prompt:", systemPrompt);
-    console.log("[AI Renai] Sending messages:", apiMessages.length);
+    const currentModel = localStorage.getItem("ai-renai-model") || "unknown";
 
     const requestBody = {
-      model: "qwen3.5",
+      model: currentModel,
       messages: apiMessages,
       stream: true,
-      max_tokens: 256,
+      max_tokens: 4096, // 賢い推論モデルの長文思考が途切れないように余裕を持たせる
       temperature: 0.8,
       top_p: 0.9,
       repeat_penalty: 1.1,
     };
 
     try {
-      let response: Awaited<ReturnType<typeof tauriFetch>> | null = null;
-      const MAX_RETRIES = 3;
-      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        response = await tauriFetch(LLAMA_API, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(requestBody),
-        });
-
-        if (response.status === 503 && attempt < MAX_RETRIES) {
-          setStreamText("モデル読み込み中... リトライします");
-          await new Promise((r) => setTimeout(r, 3000));
-          continue;
-        }
-        break;
-      }
-
-      if (!response || !response.ok) {
-        const errText = response ? await response.text() : "No response";
-        throw new Error(`API error ${response?.status}: ${errText}`);
-      }
-
-      // Try streaming first, fall back to non-streaming
-      const reader = response.body?.getReader();
-      if (!reader) {
-        // Fallback: read as text (non-streaming)
-        const text = await response.text();
-        console.log("[AI Renai] Non-streaming response:", text);
-        const lines = text.split("\n");
-        let fullText = "";
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const data = line.slice(6).trim();
-          if (data === "[DONE]") break;
-          try {
-            const json = JSON.parse(data);
-            const token = json.choices?.[0]?.delta?.content ?? json.choices?.[0]?.message?.content ?? "";
-            fullText += token;
-          } catch { /* skip */ }
-        }
-        const { expression, messages: finalMessages } = processResponse(fullText, expressionLabels);
-        if (finalMessages.length > 0) {
-          setMessages((prev) => [...prev, ...finalMessages.map(m => ({ role: "assistant" as const, content: m }))]);
-          setCurrentExpression(expression);
-        }
-        return;
-      }
-
-      const decoder = new TextDecoder();
       let fullText = "";
-      let buffer = "";
+      let visibleText = "";
+      let currentIsThought = false;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      await new Promise<void>((resolve, reject) => {
+        let isDone = false;
+        
+        let unlistenChunk: (() => void) | null = null;
+        let unlistenStatus: (() => void) | null = null;
+        let unlistenError: (() => void) | null = null;
+        let unlistenDone: (() => void) | null = null;
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        // Keep the last incomplete line in buffer
-        buffer = lines.pop() || "";
+        const cleanup = () => {
+          if (unlistenChunk) unlistenChunk();
+          if (unlistenStatus) unlistenStatus();
+          if (unlistenError) unlistenError();
+          if (unlistenDone) unlistenDone();
+        };
 
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const data = line.slice(6).trim();
-          if (data === "[DONE]") continue;
-
-          try {
-            const json = JSON.parse(data);
-            const token = json.choices?.[0]?.delta?.content;
-            if (token) {
-              fullText += token;
-              const displayText = stripForDisplay(fullText);
-              setStreamText(displayText);
+        listen<{ token: string; is_thought: boolean }>("chat-chunk", (event) => {
+          if (event.payload.is_thought) {
+            if (!currentIsThought) {
+              fullText += "<think>\n";
+              currentIsThought = true;
             }
-          } catch { /* skip */ }
-        }
-      }
+            fullText += event.payload.token;
+          } else {
+            if (currentIsThought) {
+              fullText += "\n</think>\n";
+              currentIsThought = false;
+            }
+            fullText += event.payload.token;
+            visibleText += event.payload.token;
+          }
+          const displayText = stripForDisplay(visibleText);
+          setStreamText(displayText);
+        }).then(u => unlistenChunk = u);
+
+        listen<{ message: string }>("chat-status", (event) => {
+          setStreamText(event.payload.message);
+        }).then(u => unlistenStatus = u);
+
+        listen<{ message: string }>("chat-error", (event) => {
+          console.error("[AI Renai] API JSON error:", event.payload.message);
+          fullText += `(APIエラー: ${event.payload.message})`;
+          if (!isDone) {
+            isDone = true;
+            cleanup();
+            reject(new Error(event.payload.message));
+          }
+        }).then(u => unlistenError = u);
+
+        listen("chat-done", () => {
+          if (currentIsThought) {
+            fullText += "\n</think>";
+            currentIsThought = false;
+          }
+          if (!isDone) {
+            isDone = true;
+            cleanup();
+            resolve();
+          }
+        }).then(u => unlistenDone = u);
+
+        invoke("stream_chat_response", { requestJson: JSON.stringify(requestBody) }).catch((err) => {
+          if (!isDone) {
+            isDone = true;
+            cleanup();
+            reject(err);
+          }
+        });
+      });
 
       const { expression, messages: finalMessages } = processResponse(fullText, expressionLabels);
-      console.log("[AI Renai] Final response:", finalMessages, "expression:", expression);
+      console.log("[AI Renai] Final response processing:", { fullText, finalMessages, expression });
 
       if (finalMessages.length > 0) {
         setMessages((prev) => [
@@ -262,6 +277,13 @@ export default function GameScreen({ config, onBack, initialMessages = [], onMes
           ...finalMessages.map(m => ({ role: "assistant" as const, content: m })),
         ]);
         setCurrentExpression(expression);
+      } else {
+        // 空の返答またはタグしかない場合など（AIが短く終了してしまった場合）
+        const fallbackText = fullText ? stripForDisplay(fullText) || "……" : "……";
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: fallbackText },
+        ]);
       }
     } catch (err) {
       console.error("[AI Renai] Chat error:", err);
