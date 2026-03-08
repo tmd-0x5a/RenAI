@@ -399,7 +399,7 @@ async fn stream_chat_response(app: tauri::AppHandle, request_json: String) -> Re
         println!("\n>> Starting generation with model: {}", model_name);
 
         let mut attempt = 0;
-        let max_retries = 3;
+        let max_retries = 15; // 大きなモデル（4Bなど）やCPU実行時の長いロード時間も許容するため上限を引き上げ
         
         let res = loop {
             let resp = client.post("http://127.0.0.1:8080/v1/chat/completions")
@@ -409,9 +409,9 @@ async fn stream_chat_response(app: tauri::AppHandle, request_json: String) -> Re
                 .map_err(|e| e.to_string())?;
 
             if resp.status().as_u16() == 503 && attempt < max_retries {
-                let _ = app.emit("chat-status", ChatError { message: "モデル読み込み中... 待機します".into() });
+                let _ = app.emit("chat-status", ChatError { message: "AIモデルの起動・読込中...（初回は時間がかかります）".into() });
                 attempt += 1;
-                std::thread::sleep(std::time::Duration::from_secs(3));
+                std::thread::sleep(std::time::Duration::from_secs(2));
                 continue;
             }
             break resp;
