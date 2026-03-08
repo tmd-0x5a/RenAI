@@ -55,7 +55,7 @@ fn spawn_llama_server(paths: &AppPaths, model_name: &str, use_gpu: bool) -> Resu
             "--port",
             "8080",
             "--ctx-size",
-            "2048",
+            "4096", // History + Long generation allows up to 4096
             "--n-gpu-layers",
             gpu_layers,
             "--chat-template",
@@ -399,23 +399,36 @@ async fn stream_chat_response(app: tauri::AppHandle, request_json: String) -> Re
         println!("\n>> Starting generation with model: {}", model_name);
 
         let mut attempt = 0;
-        let max_retries = 15; // 大きなモデル（4Bなど）やCPU実行時の長いロード時間も許容するため上限を引き上げ
+        let max_retries = 30; // 大きなモデル（4Bなど）やCPU実行時の長いロード時間も許容するため上限を引き上げ
         
         let res = loop {
-            let resp = client.post("http://127.0.0.1:8080/v1/chat/completions")
+            let resp_result = client.post("http://127.0.0.1:8080/v1/chat/completions")
                 .header("Content-Type", "application/json")
                 .body(request_json.clone())
-                .send()
-                .map_err(|e| e.to_string())?;
+                .send();
 
-            if resp.status().as_u16() == 503 && attempt < max_retries {
-                let _ = app.emit("chat-status", ChatError { message: "AIモデルの起動・読込中...（初回は時間がかかります）".into() });
-                attempt += 1;
-                std::thread::sleep(std::time::Duration::from_secs(2));
-                continue;
+            match resp_result {
+                Ok(resp) => {
+                    if resp.status().as_u16() == 503 && attempt < max_retries {
+                        let _ = app.emit("chat-status", ChatError { message: "AIモデルの起動・読込中...（初回や切替直後は時間がかかります）".into() });
+                        attempt += 1;
+                        std::thread::sleep(std::time::Duration::from_secs(2));
+                        continue;
+                    }
+                    break Ok(resp);
+                }
+                Err(e) => {
+                    // Connect error (server not up yet)
+                    if attempt < max_retries {
+                        let _ = app.emit("chat-status", ChatError { message: "AIエンジンを起動しています...少々お待ちください".into() });
+                        attempt += 1;
+                        std::thread::sleep(std::time::Duration::from_secs(2));
+                        continue;
+                    }
+                    break Err(e.to_string());
+                }
             }
-            break resp;
-        };
+        }?;
 
         if !res.status().is_success() {
             let status = res.status();

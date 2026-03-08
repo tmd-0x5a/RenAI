@@ -51,12 +51,9 @@ ${expressionInstruction}
 15. 前置きは一切せず、いきなり最終的な【1つのセリフだけ】を出力しなさい。
 16. 言いたいことが多いときは改行で区切って複数メッセージに分けてOK（各メッセージは30文字以内）
 
-## 返答の例（参考程度・似せないこと・影響を与えない）
 ユーザー: 今日どうだった？
 ${labels.length > 0 ? '[通常]' : ''}今日めっちゃ疲れた〜
-${labels.length > 0 ? '[通常]' : ''}でも君と話せて元気出た♪
-
-/no_think`;
+${labels.length > 0 ? '[通常]' : ''}でも君と話せて元気出た♪`;
 }
 
 /** Strip <think> tags and extract [expression] tag + split multiple messages */
@@ -188,10 +185,12 @@ export default function GameScreen({ config, onBack, initialMessages = [], onMes
       model: currentModel,
       messages: apiMessages,
       stream: true,
-      max_tokens: 4096, // 賢い推論モデルの長文思考が途切れないように余裕を持たせる
+      max_tokens: 400, // 無限に生成を続けて激重になるのを防ぐため、十分な長さに制限
       temperature: 0.8,
       top_p: 0.9,
       repeat_penalty: 1.1,
+      // ユーザーのセリフを勝手に捏造するなど、一人二役の暴走を完全にブロックして強制停止させる
+      stop: ["<|im_end|>", "<|im_start|>", "<|endoftext|>", "ユーザー:", "User:", "bot:", "思考:", "\n\n\n\n"],
     };
 
     try {
